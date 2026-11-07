@@ -24,10 +24,16 @@ export interface ScannerStatus {
 }
 
 export class TelegramNotifier {
+  private recipientReady = false;
+
   constructor(
     private readonly bot: Telegraf,
     private readonly config: ScannerConfig,
   ) {}
+
+  markRecipientReady(): void {
+    this.recipientReady = true;
+  }
 
   async sendNewTokenAlert(
     analysis: Awaited<ReturnType<typeof analyzeToken>>,
@@ -55,6 +61,18 @@ export class TelegramNotifier {
       .where(eq(sentAlerts.mint, analysis.mint))
       .limit(1);
     if (!record || record.status === "sent") return false;
+
+    if (!this.recipientReady) {
+      await db
+        .update(sentAlerts)
+        .set({
+          status: "retry",
+          lastError: "Waiting for Telegram recipient access.",
+        })
+        .where(eq(sentAlerts.id, record.id));
+      logger.info({ mint: analysis.mint }, "Alert queued until the Telegram recipient is accessible");
+      return false;
+    }
 
     try {
       await db
@@ -129,6 +147,7 @@ export function createTelegramBot(
 
   bot.use(async (ctx, next) => {
     if (String(ctx.chat?.id ?? "") !== config.chatId) return;
+    notifier.markRecipientReady();
     await next();
   });
 

@@ -126,7 +126,7 @@ export class HeliusClient {
     this.websocketUrl = `wss://mainnet.helius-rpc.com/?api-key=${encoded}`;
   }
 
-  async rpc<T>(method: string, params: unknown[]): Promise<T> {
+  async rpc<T>(method: string, params: unknown): Promise<T> {
     return withRetry(
       () => this.serializedRequest<T>(method, params),
       { operation: `Helius ${method}`, attempts: 5, timeoutMs: 15_000 },
@@ -139,7 +139,7 @@ export class HeliusClient {
       {
         encoding: "jsonParsed",
         commitment: "confirmed",
-        maxSupportedTransactionVersion: 0,
+        maxSupportedTransactionVersion: 1,
       },
     ]);
   }
@@ -198,31 +198,33 @@ export class HeliusClient {
   ): Promise<{ accounts: DasTokenAccount[]; total: number; complete: boolean }> {
     const accounts: DasTokenAccount[] = [];
     let cursor: string | undefined;
-    let total = 0;
     const pageSize = 1_000;
+    let complete = false;
 
-    for (let page = 1; page <= Math.ceil(maxAccounts / pageSize); page += 1) {
+    while (accounts.length < maxAccounts) {
       const params: Record<string, unknown> = {
         mint: new PublicKey(mint).toBase58(),
-        page,
-        limit: pageSize,
+        limit: Math.min(pageSize, maxAccounts - accounts.length),
         options: { showZeroBalance: false },
       };
       if (cursor) params.cursor = cursor;
-      const result = await this.rpc<DasTokenAccountsPage>("getTokenAccounts", [params]);
-      total = result.total;
-      accounts.push(...(result.token_accounts ?? []));
-      if (accounts.length >= total || !result.cursor || result.cursor === cursor) {
-        return { accounts: accounts.slice(0, maxAccounts), total, complete: accounts.length >= total };
+      const result = await this.rpc<DasTokenAccountsPage>("getTokenAccounts", params);
+      const pageAccounts = result.token_accounts ?? [];
+      accounts.push(...pageAccounts.slice(0, maxAccounts - accounts.length));
+      if (!result.cursor) {
+        complete = true;
+        break;
       }
+      if (result.cursor === cursor) break;
       cursor = result.cursor;
+      if (accounts.length >= maxAccounts) break;
     }
-    return { accounts: accounts.slice(0, maxAccounts), total, complete: accounts.length >= total };
+    return { accounts, total: accounts.length, complete };
   }
 
   async getAsset(mint: string): Promise<HeliusAsset | null> {
     try {
-      return await this.rpc<HeliusAsset>("getAsset", [{ id: new PublicKey(mint).toBase58() }]);
+      return await this.rpc<HeliusAsset>("getAsset", { id: new PublicKey(mint).toBase58() });
     } catch (error) {
       logger.warn({ mint, err: error }, "Helius DAS getAsset was unavailable");
       return null;
@@ -237,7 +239,7 @@ export class HeliusClient {
     }
   }
 
-  private async serializedRequest<T>(method: string, params: unknown[]): Promise<T> {
+  private async serializedRequest<T>(method: string, params: unknown): Promise<T> {
     const request = this.queue.then(async () => {
       const waitMs = Math.max(0, this.nextRequestAt - Date.now());
       if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));

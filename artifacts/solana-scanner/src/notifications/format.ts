@@ -31,7 +31,7 @@ export function formatTokenReport(analysis: TokenAnalysis): string {
     analysis.top10HolderPct === null
       ? analysis.topTokenAccountPct === null
         ? "Unavailable"
-        : `At least ${analysis.topTokenAccountPct.toFixed(1)}% in the largest 10 token accounts; holder-wallet total is unverified`
+        : `At least ${analysis.topTokenAccountPct.toFixed(1)}% in the 10 largest token accounts; wallet-level holder concentration is unavailable`
       : `${analysis.top10HolderPct.toFixed(1)}%${analysis.top10HolderCoverageComplete ? "" : " (partial sample)"}`;
   const peak =
     developer?.verifiedPeakMarketCapUsd === null || developer?.verifiedPeakMarketCapUsd === undefined

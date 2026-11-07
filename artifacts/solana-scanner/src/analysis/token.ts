@@ -78,7 +78,7 @@ interface HolderAnalysis {
   complete: boolean;
   topTokenAccountPct: number | null;
   accountCount: number;
-  totalAccounts: number;
+  totalAccounts: number | null;
 }
 
 const HOLDER_ENUMERATION_LIMIT = 5_000;
@@ -158,16 +158,16 @@ async function inspectMint(helius: HeliusClient, mint: string): Promise<MintSecu
 
 async function inspectHolders(helius: HeliusClient, mint: string, supplyRaw: string | null): Promise<HolderAnalysis> {
   if (!supplyRaw) {
-    return { top10HolderPct: null, complete: false, topTokenAccountPct: null, accountCount: 0, totalAccounts: 0 };
+    return { top10HolderPct: null, complete: false, topTokenAccountPct: null, accountCount: 0, totalAccounts: null };
   }
   let supply: bigint;
   try {
     supply = BigInt(supplyRaw);
   } catch {
-    return { top10HolderPct: null, complete: false, topTokenAccountPct: null, accountCount: 0, totalAccounts: 0 };
+    return { top10HolderPct: null, complete: false, topTokenAccountPct: null, accountCount: 0, totalAccounts: null };
   }
   if (supply <= 0n) {
-    return { top10HolderPct: null, complete: false, topTokenAccountPct: null, accountCount: 0, totalAccounts: 0 };
+    return { top10HolderPct: null, complete: false, topTokenAccountPct: null, accountCount: 0, totalAccounts: null };
   }
 
   let holderResult: Awaited<ReturnType<HeliusClient["getTokenAccountsByMint"]>>;
@@ -176,16 +176,28 @@ async function inspectHolders(helius: HeliusClient, mint: string, supplyRaw: str
   } catch (error) {
     logger.warn({ mint, err: error }, "Complete holder enumeration was unavailable; using largest token accounts only");
     const largest = await helius.getLargestTokenAccounts(mint).catch(() => []);
-    const accountAmounts = largest.map((account) => BigInt(account.amount));
-    const topTen = accountAmounts
-      .slice(0, 10)
-      .reduce((sum, amount) => sum + amount, 0n);
+    const accountAmounts = largest.slice(0, 10).map((account) => BigInt(account.amount));
+    const topTen = accountAmounts.reduce((sum, amount) => sum + amount, 0n);
     return {
       top10HolderPct: null,
       complete: false,
-      topTokenAccountPct: Number((topTen * 10_000n) / supply) / 100,
+      topTokenAccountPct:
+        accountAmounts.length > 0 ? Number((topTen * 10_000n) / supply) / 100 : null,
       accountCount: accountAmounts.length,
-      totalAccounts: 0,
+      totalAccounts: null,
+    };
+  }
+  if (!holderResult.complete) {
+    const largest = await helius.getLargestTokenAccounts(mint).catch(() => []);
+    const accountAmounts = largest.slice(0, 10).map((account) => BigInt(account.amount));
+    const topTen = accountAmounts.reduce((sum, amount) => sum + amount, 0n);
+    return {
+      top10HolderPct: null,
+      complete: false,
+      topTokenAccountPct:
+        accountAmounts.length > 0 ? Number((topTen * 10_000n) / supply) / 100 : null,
+      accountCount: holderResult.accounts.length,
+      totalAccounts: null,
     };
   }
   const ownerAmounts = new Map<string, bigint>();
@@ -204,10 +216,9 @@ async function inspectHolders(helius: HeliusClient, mint: string, supplyRaw: str
     .sort((a, b) => (a > b ? -1 : a < b ? 1 : 0))
     .slice(0, 10)
     .reduce((sum, amount) => sum + amount, 0n);
-  const complete = holderResult.complete;
   return {
-    top10HolderPct: complete ? Number((topOwners * 10_000n) / supply) / 100 : null,
-    complete,
+    top10HolderPct: Number((topOwners * 10_000n) / supply) / 100,
+    complete: true,
     topTokenAccountPct,
     accountCount: holderResult.accounts.length,
     totalAccounts: holderResult.total,
@@ -370,7 +381,7 @@ function flagsFor(
   }
   if (!holders.complete) {
     flags.push(
-      `Holder enumeration is partial (${holders.accountCount} of ${holders.totalAccounts || "unknown"} token accounts).`,
+      `Holder enumeration is partial (${holders.accountCount} token accounts sampled; full count unavailable).`,
     );
   }
   if (creatorAllocationPct !== null && creatorAllocationPct >= 25) {
